@@ -4,6 +4,11 @@ import re
 import os
 from datetime import datetime, timedelta, timezone
 import opencc
+import time
+import uuid
+import requests
+import socketio
+import threading
 
 # ===================== 全局核心配置 =====================
 # 指定按TXT文件内顺序排列的分类，其余自动字典序排序，按需增删
@@ -20,10 +25,21 @@ URL_FETCH_TIMEOUT = 10
 # 白名单测速阈值(ms)
 RESPONSE_TIME_THRESHOLD = 2000
 # M3U相关配置
-TVG_URL = "https://github.com/CCSH/IPTV/raw/refs/heads/main/e.xml.gz"
-LOGO_URL_TPL = "https://raw.githubusercontent.com/CCSH/IPTV/refs/heads/main/logo/{}.png"
+
+TVG_URL = "https://gh-proxy.com/https://github.com/pan8664716/IPTV/raw/refs/heads/main/e.xml.gz"
+LOGO_URL_TPL = "https://gh-proxy.com/https://raw.githubusercontent.com/pan8664716/IPTV/refs/heads/main/logo/{}.png"
 # 所有单个频道最多保留的有效源数量，可直接修改数字（-1=无限制）
-SINGLE_CHANNEL_MAX_COUNT = 20  
+# 对于 SocketIO 聚合的数据，增大此值以充分利用收集到的资源
+SINGLE_CHANNEL_MAX_COUNT = -1  # 无限制：使用所有收集到的源  
+
+# ==========================================
+# SocketIO 资源获取配置
+# ==========================================
+BASE_URL = "https://iptv.809899.xyz"
+RAW_MERGED_RESOURCES_FILE = "raw_merged_resources.txt"
+# 清理环境代理
+for env_key in ["http_proxy", "https_proxy", "all_proxy", "HTTP_PROXY", "HTTPS_PROXY"]:
+    os.environ.pop(env_key, None)
 
 # ===================== 通用工具函数 =====================
 def get_project_dirs() -> dict:
@@ -269,34 +285,84 @@ def convert_m3u_to_txt(m3u_content: str) -> list:
                 txt_lines.append(line)
     return txt_lines
 
-def process_remote_url(url: str, classifier: ChannelClassifier, corrections: dict):
-    print(f"[PROCESS] 拉取远程源: {url}")
-    classifier.other_lines.append(f"{url},#genre#")
-    try:
-        headers = {'User-Agent': USER_AGENT}
-        req = urllib.request.Request(safe_quote_url(url), headers=headers)
-        with urllib.request.urlopen(req, timeout=URL_FETCH_TIMEOUT) as resp:
-            data = resp.read()
-            text = None
-            for encoding in ['utf-8', 'gbk', 'gb2312', 'iso-8859-1']:
-                try:
-                    text = data.decode(encoding)
-                    break
-                except UnicodeDecodeError:
-                    continue
-            if not text:
-                print(f"[ERROR] 远程源 {url} 解码失败")
-                return
-            if is_m3u_content(text):
-                lines = convert_m3u_to_txt(text)
-            else:
-                lines = [line.strip() for line in text.split('\n') if line.strip()]
-        print(f"[PROCESS] 远程源 {url} 提取有效行: {len(lines)}")
-        for line in lines:
-            process_single_line(line, classifier, corrections)
-        classifier.other_lines.append('\n')
-    except Exception as e:
-        print(f"[ERROR] 处理远程源 {url} 失败: {str(e)}")
+# ==========================================
+# 资源获取器 (WebSocket/SocketIO)
+# ==========================================
+class RawResourceFetcher:
+    def __init__(self):
+        self.session_id = f"fetch_{int(time.time())}_{uuid.uuid4().hex[:6]}"
+        self.sio = socketio.Client()
+        self.raw_data_list = []  # 存储每个节点的原始文本
+        self.task_finished = threading.Event()
+        self._setup_handlers()
+
+    def _setup_handlers(self):
+        """注册 WebSocket 监听事件"""
+        @self.sio.on('connect', namespace='/search')
+        def on_connect():
+            print(f"✅ 已连接服务器 (Session: {self.session_id})")
+            self.sio.emit('join_session', {'session_id': self.session_id}, namespace='/search')
+
+        @self.sio.on('result', namespace='/search')
+        def on_result(data):
+            # 每个节点的数据通常包含 channels 列表
+            # 我们将 channels 转换回 '频道名,链接' 的原始文本格式
+            channels = data.get('channels', [])
+            node_ip = data.get('ip', 'Unknown')
+            
+            node_content = []
+            for ch in channels:
+                name = ch.get('name', '').strip()
+                url = ch.get('url', '').strip()
+                if name and url:
+                    node_content.append(f"{name},{url}")
+            
+            if node_content:
+                self.raw_data_list.append("\n".join(node_content))
+                print(f"📡 已获取节点 [{node_ip}] 的资源 (当前已收集 {len(self.raw_data_list)}/25)")
+            
+            # 达到 25 个节点提前结束
+            if len(self.raw_data_list) >= 25:
+                self.task_finished.set()
+
+        @self.sio.on('finished', namespace='/search')
+        def on_finished(data=None):
+            print("🏁 后端扫描已全部完成")
+            self.task_finished.set()
+
+    def start_capture(self):
+        """启动抓取流程"""
+        try:
+            self.sio.connect(BASE_URL, namespaces=['/search'], transports=['websocket'])
+            
+            # 发起 HTTP 请求告知后端开始搜刮
+            resp = requests.post(
+                f"{BASE_URL}/api/search/start", 
+                json={"keyword": "", "mode": "multicast_list", "session_id": self.session_id},
+                timeout=30
+            )
+            resp.raise_for_status()
+            print("🚀 搜刮指令下达成功，正在接收原始数据...")
+            
+        except Exception as e:
+            print(f"❌ 启动失败: {e}")
+            self.task_finished.set()
+
+def save_raw_file(data_list, filename):
+    """将收集到的列表直接合并写入文件"""
+    if not data_list:
+        print("📭 没有收集到任何数据，文件未生成。")
+        return
+
+    # 直接用换行符连接所有节点的原始文本
+    final_content = "\n".join(data_list)
+    
+    with open(filename, 'w', encoding='utf-8') as f:
+        f.write(final_content)
+    
+    print(f"\n✨ 聚合完成！")
+    print(f"📂 原始 TXT 已保存至: {os.path.abspath(filename)}")
+    print(f"💡 现在你可以将此文件交给 CCSH/IPTV 项目进行精细化分类了。")
 
 def process_single_line(line: str, classifier: ChannelClassifier, corrections: dict):
     if "#genre#" in line or "#EXTINF:" in line or "," not in line or "://" not in line:
@@ -408,35 +474,52 @@ if __name__ == "__main__":
     main_dict, local_dict = load_channel_dictionaries(dirs["main_channel"], dirs["local_channel"])
     classifier = ChannelClassifier(main_dict, local_dict, blacklist)
 
-    print(f"[PROCESS] 处理手动白名单")
-    whitelist_manual = read_txt(dirs["whitelist_manual"])
-    classifier.other_lines.append("白名单,#genre#")
-    for line in whitelist_manual:
-        process_single_line(line, classifier, corrections)
+    # ========== 已禁用白名单处理，仅使用 SocketIO 聚合数据 ==========
+    # print(f"[PROCESS] 处理手动白名单")
+    # whitelist_manual = read_txt(dirs["whitelist_manual"])
+    # classifier.other_lines.append("白名单,#genre#")
+    # for line in whitelist_manual:
+    #     process_single_line(line, classifier, corrections)
 
-    print(f"[PROCESS] 处理自动白名单（响应时间<{RESPONSE_TIME_THRESHOLD}ms）")
-    whitelist_respotime = read_txt(dirs["whitelist_respotime"])
-    classifier.other_lines.append("白名单测速,#genre#")
-    for line in whitelist_respotime:
-        if "#genre#" in line or "," not in line or "://" not in line:
-            continue
-        parts = line.split(",")
-        try:
-            # 移除 'ms' 并去除空格
-            time_str = parts[0].replace('ms', '').strip()
-            # 转换为浮点数，空字符串返回无穷大
-            resp_time = float(time_str) if time_str else float('inf')
-        except (ValueError, IndexError, AttributeError):
-            resp_time = float('inf')
-            
-        if resp_time < RESPONSE_TIME_THRESHOLD:
-            process_single_line(",".join(parts[1:]), classifier, corrections)
+    # print(f"[PROCESS] 处理自动白名单（响应时间<{RESPONSE_TIME_THRESHOLD}ms）")
+    # whitelist_respotime = read_txt(dirs["whitelist_respotime"])
+    # classifier.other_lines.append("白名单测速,#genre#")
+    # for line in whitelist_respotime:
+    #     if "#genre#" in line or "," not in line or "://" not in line:
+    #         continue
+    #     parts = line.split(",")
+    #     try:
+    #         # 移除 'ms' 并去除空格
+    #         time_str = parts[0].replace('ms', '').strip()
+    #         # 转换为浮点数，空字符串返回无穷大
+    #         resp_time = float(time_str) if time_str else float('inf')
+    #     except (ValueError, IndexError, AttributeError):
+    #         resp_time = float('inf')
+    #         
+    #     if resp_time < RESPONSE_TIME_THRESHOLD:
+    #         process_single_line(",".join(parts[1:]), classifier, corrections)
 
-    print(f"[PROCESS] 处理远程URL源")
-    urls = read_txt(dirs["urls"])
-    for url in urls:
-        if url.startswith("http"):
-            process_remote_url(url, classifier, corrections)
+    print(f"[PROCESS] 处理 SocketIO 聚合源")
+    # 启动 SocketIO 资源抓取
+    fetcher = RawResourceFetcher()
+    fetcher.start_capture()
+    
+    # 等待直到：抓够25个节点 OR 后端扫描完 OR 达到7.5分钟超时
+    fetcher.task_finished.wait(timeout=450)
+    
+    fetcher.sio.disconnect()
+    
+    # 保存原始文件
+    raw_output_path = os.path.join(dirs["root"], RAW_MERGED_RESOURCES_FILE)
+    save_raw_file(fetcher.raw_data_list[:25], raw_output_path)
+    
+    # 处理原始文件中的内容
+    if os.path.exists(raw_output_path):
+        classifier.other_lines.append(f"SocketIO聚合源,#genre#")
+        raw_lines = read_txt(raw_output_path)
+        for line in raw_lines:
+            process_single_line(line, classifier, corrections)
+        classifier.other_lines.append('\n')
 
     print(f"[GENERATE] 生成live.txt/live_lite.txt")
     live_full, live_lite = generate_live_text(classifier, main_dict)
