@@ -474,30 +474,29 @@ if __name__ == "__main__":
     main_dict, local_dict = load_channel_dictionaries(dirs["main_channel"], dirs["local_channel"])
     classifier = ChannelClassifier(main_dict, local_dict, blacklist)
 
-    # ========== 已禁用白名单处理，仅使用 SocketIO 聚合数据 ==========
-    # print(f"[PROCESS] 处理手动白名单")
-    # whitelist_manual = read_txt(dirs["whitelist_manual"])
-    # classifier.other_lines.append("白名单,#genre#")
-    # for line in whitelist_manual:
-    #     process_single_line(line, classifier, corrections)
+    print(f"[PROCESS] 处理手动白名单")
+    whitelist_manual = read_txt(dirs["whitelist_manual"])
+    classifier.other_lines.append("白名单,#genre#")
+    for line in whitelist_manual:
+        process_single_line(line, classifier, corrections)
 
-    # print(f"[PROCESS] 处理自动白名单（响应时间<{RESPONSE_TIME_THRESHOLD}ms）")
-    # whitelist_respotime = read_txt(dirs["whitelist_respotime"])
-    # classifier.other_lines.append("白名单测速,#genre#")
-    # for line in whitelist_respotime:
-    #     if "#genre#" in line or "," not in line or "://" not in line:
-    #         continue
-    #     parts = line.split(",")
-    #     try:
-    #         # 移除 'ms' 并去除空格
-    #         time_str = parts[0].replace('ms', '').strip()
-    #         # 转换为浮点数，空字符串返回无穷大
-    #         resp_time = float(time_str) if time_str else float('inf')
-    #     except (ValueError, IndexError, AttributeError):
-    #         resp_time = float('inf')
-    #         
-    #     if resp_time < RESPONSE_TIME_THRESHOLD:
-    #         process_single_line(",".join(parts[1:]), classifier, corrections)
+    print(f"[PROCESS] 处理自动白名单（响应时间<{RESPONSE_TIME_THRESHOLD}ms）")
+    whitelist_respotime = read_txt(dirs["whitelist_respotime"])
+    classifier.other_lines.append("白名单测速,#genre#")
+    for line in whitelist_respotime:
+        if "#genre#" in line or "," not in line or "://" not in line:
+            continue
+        parts = line.split(",")
+        try:
+            # 移除 'ms' 并去除空格
+            time_str = parts[0].replace('ms', '').strip()
+            # 转换为浮点数，空字符串返回无穷大
+            resp_time = float(time_str) if time_str else float('inf')
+        except (ValueError, IndexError, AttributeError):
+            resp_time = float('inf')
+            
+        if resp_time < RESPONSE_TIME_THRESHOLD:
+            process_single_line(",".join(parts[1:]), classifier, corrections)
 
     print(f"[PROCESS] 处理 SocketIO 聚合源")
     # 启动 SocketIO 资源抓取
