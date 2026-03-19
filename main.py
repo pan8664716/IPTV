@@ -29,8 +29,8 @@ RESPONSE_TIME_THRESHOLD = 2000
 TVG_URL = "https://gh-proxy.com/https://github.com/pan8664716/IPTV/raw/refs/heads/main/e.xml.gz"
 LOGO_URL_TPL = "https://gh-proxy.com/https://raw.githubusercontent.com/pan8664716/IPTV/refs/heads/main/logo/{}.png"
 # 所有单个频道最多保留的有效源数量，可直接修改数字（-1=无限制）
-# 对于 SocketIO 聚合的数据，增大此值以充分利用收集到的资源
-SINGLE_CHANNEL_MAX_COUNT = -1  # 无限制：使用所有收集到的源  
+# 限制每个频道最多 30 个源：平衡质量和列表大小
+SINGLE_CHANNEL_MAX_COUNT = 30  
 
 # ==========================================
 # SocketIO 资源获取配置
