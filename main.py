@@ -475,6 +475,28 @@ if __name__ == "__main__":
     main_dict, local_dict = load_channel_dictionaries(dirs["main_channel"], dirs["local_channel"])
     classifier = ChannelClassifier(main_dict, local_dict, blacklist)
 
+    print(f"[PROCESS] 处理 SocketIO 聚合源（优先处理）")
+    # 启动 SocketIO 资源抓取
+    fetcher = RawResourceFetcher()
+    fetcher.start_capture()
+    
+    # 等待直到：抓够25个节点 OR 后端扫描完 OR 达到7.5分钟超时
+    fetcher.task_finished.wait(timeout=450)
+    
+    fetcher.sio.disconnect()
+    
+    # 保存原始文件到黑白名单目录
+    raw_output_path = dirs["raw_merged_resources"]
+    save_raw_file(fetcher.raw_data_list[:25], raw_output_path)
+    
+    # 处理原始文件中的内容 - 最优先处理
+    if os.path.exists(raw_output_path):
+        classifier.other_lines.append(f"SocketIO聚合源,#genre#")
+        raw_lines = read_txt(raw_output_path)
+        for line in raw_lines:
+            process_single_line(line, classifier, corrections)
+        classifier.other_lines.append('\n')
+
     print(f"[PROCESS] 处理手动白名单")
     whitelist_manual = read_txt(dirs["whitelist_manual"])
     classifier.other_lines.append("白名单,#genre#")
@@ -498,28 +520,6 @@ if __name__ == "__main__":
             
         if resp_time < RESPONSE_TIME_THRESHOLD:
             process_single_line(",".join(parts[1:]), classifier, corrections)
-
-    print(f"[PROCESS] 处理 SocketIO 聚合源")
-    # 启动 SocketIO 资源抓取
-    fetcher = RawResourceFetcher()
-    fetcher.start_capture()
-    
-    # 等待直到：抓够25个节点 OR 后端扫描完 OR 达到7.5分钟超时
-    fetcher.task_finished.wait(timeout=450)
-    
-    fetcher.sio.disconnect()
-    
-    # 保存原始文件到黑白名单目录
-    raw_output_path = dirs["raw_merged_resources"]
-    save_raw_file(fetcher.raw_data_list[:25], raw_output_path)
-    
-    # 处理原始文件中的内容
-    if os.path.exists(raw_output_path):
-        classifier.other_lines.append(f"SocketIO聚合源,#genre#")
-        raw_lines = read_txt(raw_output_path)
-        for line in raw_lines:
-            process_single_line(line, classifier, corrections)
-        classifier.other_lines.append('\n')
 
     print(f"[GENERATE] 生成live.txt/live_lite.txt")
     live_full, live_lite = generate_live_text(classifier, main_dict)
