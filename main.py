@@ -54,7 +54,8 @@ def get_project_dirs() -> dict:
         "corrections_name": os.path.join(root_dir, "assets/corrections_name.txt"),
         "urls": os.path.join(root_dir, "assets/urls.txt"),
         "main_channel": os.path.join(root_dir, "主频道"),
-        "local_channel": os.path.join(root_dir, "地方台")
+        "local_channel": os.path.join(root_dir, "地方台"),
+        "raw_merged_resources": os.path.join(root_dir, "assets/whitelist-blacklist/raw_merged_resources.txt")
     }
 
 def read_txt(file_path: str, strip: bool = True, skip_empty: bool = True) -> list:
@@ -508,8 +509,8 @@ if __name__ == "__main__":
     
     fetcher.sio.disconnect()
     
-    # 保存原始文件
-    raw_output_path = os.path.join(dirs["root"], RAW_MERGED_RESOURCES_FILE)
+    # 保存原始文件到黑白名单目录
+    raw_output_path = dirs["raw_merged_resources"]
     save_raw_file(fetcher.raw_data_list[:25], raw_output_path)
     
     # 处理原始文件中的内容
