@@ -292,9 +292,10 @@ def convert_m3u_to_txt(m3u_content: str) -> list:
 class RawResourceFetcher:
     def __init__(self):
         self.session_id = f"fetch_{int(time.time())}_{uuid.uuid4().hex[:6]}"
-        self.sio = socketio.Client()
+        self.sio = socketio.Client(logger=True, engineio_logger=False)
         self.raw_data_list = []  # 存储每个节点的原始文本
         self.task_finished = threading.Event()
+        self.connected = threading.Event()
         self._setup_handlers()
 
     def _setup_handlers(self):
@@ -302,7 +303,21 @@ class RawResourceFetcher:
         @self.sio.on('connect', namespace='/search')
         def on_connect():
             print(f"✅ 已连接服务器 (Session: {self.session_id})")
+            self.connected.set()
             self.sio.emit('join_session', {'session_id': self.session_id}, namespace='/search')
+
+        @self.sio.on('disconnect', namespace='/search')
+        def on_disconnect():
+            print("⚠️ 与服务器断开连接")
+            self.connected.clear()
+
+        @self.sio.on('connect_error', namespace='/search')
+        def on_connect_error(error):
+            print(f"❌ 连接错误: {error}")
+
+        @self.sio.on('error', namespace='/search')
+        def on_error(error):
+            print(f"❌ 服务器错误: {error}")
 
         @self.sio.on('result', namespace='/search')
         def on_result(data):
@@ -334,9 +349,22 @@ class RawResourceFetcher:
     def start_capture(self):
         """启动抓取流程"""
         try:
-            self.sio.connect(BASE_URL, namespaces=['/search'], transports=['websocket'])
+            print(f"🔗 正在连接至: {BASE_URL}")
+            self.sio.connect(
+                BASE_URL, 
+                namespaces=['/search'], 
+                transports=['websocket'],
+                wait_timeout=10
+            )
+            
+            # 等待连接完全建立（最多5秒）
+            if not self.connected.wait(timeout=5):
+                print("❌ 连接超时：服务器无响应")
+                self.task_finished.set()
+                return
             
             # 发起 HTTP 请求告知后端开始搜刮
+            print("📤 发送搜刮指令...")
             resp = requests.post(
                 f"{BASE_URL}/api/search/start", 
                 json={"keyword": "", "mode": "multicast_list", "session_id": self.session_id},
@@ -345,8 +373,17 @@ class RawResourceFetcher:
             resp.raise_for_status()
             print("🚀 搜刮指令下达成功，正在接收原始数据...")
             
+        except socketio.exceptions.ConnectionError as e:
+            print(f"❌ SocketIO 连接失败: {e}")
+            print(f"💡 请检查服务器地址是否正确: {BASE_URL}")
+            self.task_finished.set()
+        except requests.exceptions.RequestException as e:
+            print(f"❌ HTTP 请求失败: {e}")
+            self.task_finished.set()
         except Exception as e:
-            print(f"❌ 启动失败: {e}")
+            print(f"❌ 启动失败: {type(e).__name__}: {e}")
+            import traceback
+            traceback.print_exc()
             self.task_finished.set()
 
 def save_raw_file(data_list, filename):
@@ -483,7 +520,12 @@ if __name__ == "__main__":
     # 等待直到：抓够25个节点 OR 后端扫描完 OR 达到7.5分钟超时
     fetcher.task_finished.wait(timeout=450)
     
-    fetcher.sio.disconnect()
+    # 安全断开连接
+    try:
+        if fetcher.sio.connected:
+            fetcher.sio.disconnect()
+    except Exception as e:
+        print(f"⚠️ 断开连接时出错: {e}")
     
     # 保存原始文件到黑白名单目录
     raw_output_path = dirs["raw_merged_resources"]
