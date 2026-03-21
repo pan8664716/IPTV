@@ -1,0 +1,40 @@
+name: 环境诊断 - SocketIO连接问题
+
+on:
+  workflow_dispatch:  # 手动触发
+  
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: 设置Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+      
+      - name: 安装依赖
+        run: |
+          pip install -q requests python-socketio
+      
+      - name: 运行诊断脚本
+        run: python diagnose.py
+      
+      - name: 检查网络连接
+        run: |
+          echo "=== 检查DNS ==="
+          nslookup iptv.809899.xyz || echo "DNS失败"
+          
+          echo "=== 检查网络连接 ==="
+          curl -v -m 10 "https://iptv.809899.xyz" || echo "连接失败"
+          
+          echo "=== 获取系统信息 ==="
+          uname -a
+          
+          echo "=== 检查IP信息 ==="
+          curl -s "https://api.ipify.org?format=json" || echo "获取IP失败"
+          
+          echo "=== 检查SSL/TLS ==="
+          openssl s_client -connect iptv.809899.xyz:443 -showcerts < /dev/null || echo "SSL检查失败"
