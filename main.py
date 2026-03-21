@@ -9,6 +9,10 @@ import uuid
 import requests
 import socketio
 import threading
+import warnings
+
+# 在Actions等受信环境中，禁用 SSL 验证时的警告
+requests.packages.urllib3.disable_warnings(requests.packages.urllib3.exceptions.InsecureRequestWarning)
 
 # ===================== 全局核心配置 =====================
 # 指定按TXT文件内顺序排列的分类，其余自动字典序排序，按需增删
@@ -292,7 +296,8 @@ def convert_m3u_to_txt(m3u_content: str) -> list:
 class RawResourceFetcher:
     def __init__(self):
         self.session_id = f"fetch_{int(time.time())}_{uuid.uuid4().hex[:6]}"
-        self.sio = socketio.Client(logger=True, engineio_logger=False)
+        # 禁用日志以减少输出噪音
+        self.sio = socketio.Client(logger=False, engineio_logger=False, reconnection=True, reconnection_attempts=3, reconnection_delay=1)
         self.raw_data_list = []  # 存储每个节点的原始文本
         self.task_finished = threading.Event()
         self.connected = threading.Event()
@@ -347,44 +352,89 @@ class RawResourceFetcher:
             self.task_finished.set()
 
     def start_capture(self):
-        """启动抓取流程"""
-        try:
-            print(f"🔗 正在连接至: {BASE_URL}")
-            self.sio.connect(
-                BASE_URL, 
-                namespaces=['/search'], 
-                transports=['websocket'],
-                wait_timeout=10
-            )
-            
-            # 等待连接完全建立（最多5秒）
-            if not self.connected.wait(timeout=5):
-                print("❌ 连接超时：服务器无响应")
-                self.task_finished.set()
-                return
-            
-            # 发起 HTTP 请求告知后端开始搜刮
-            print("📤 发送搜刮指令...")
-            resp = requests.post(
-                f"{BASE_URL}/api/search/start", 
-                json={"keyword": "", "mode": "multicast_list", "session_id": self.session_id},
-                timeout=30
-            )
-            resp.raise_for_status()
-            print("🚀 搜刮指令下达成功，正在接收原始数据...")
-            
-        except socketio.exceptions.ConnectionError as e:
-            print(f"❌ SocketIO 连接失败: {e}")
-            print(f"💡 请检查服务器地址是否正确: {BASE_URL}")
-            self.task_finished.set()
-        except requests.exceptions.RequestException as e:
-            print(f"❌ HTTP 请求失败: {e}")
-            self.task_finished.set()
-        except Exception as e:
-            print(f"❌ 启动失败: {type(e).__name__}: {e}")
-            import traceback
-            traceback.print_exc()
-            self.task_finished.set()
+        """启动抓取流程（带重试机制）"""
+        max_retries = 3
+        retry_count = 0
+        
+        while retry_count < max_retries:
+            try:
+                retry_count += 1
+                print(f"🔗 正在连接至: {BASE_URL} (尝试 {retry_count}/{max_retries})")
+                
+                # 禁用SSL验证并设置更长的超时
+                self.sio.connect(
+                    BASE_URL, 
+                    namespaces=['/search'], 
+                    transports=['websocket', 'polling'],  # 添加fallback transport
+                    wait_timeout=15,
+                    headers={'User-Agent': USER_AGENT}
+                )
+                
+                # 等待连接完全建立（最多10秒）
+                if not self.connected.wait(timeout=10):
+                    print("❌ 连接超时：服务器无响应")
+                    if self.sio.connected:
+                        self.sio.disconnect()
+                    if retry_count < max_retries:
+                        print(f"⏳ 等待 3 秒后重试...")
+                        time.sleep(3)
+                        continue
+                    self.task_finished.set()
+                    return
+                
+                # 发起 HTTP 请求告知后端开始搜刮
+                print("📤 发送搜刮指令...")
+                resp = requests.post(
+                    f"{BASE_URL}/api/search/start", 
+                    json={"keyword": "", "mode": "multicast_list", "session_id": self.session_id},
+                    timeout=30,
+                    verify=False  # 在Actions等受信环境中禁用SSL验证
+                )
+                resp.raise_for_status()
+                print("🚀 搜刮指令下达成功，正在接收原始数据...")
+                return  # 成功，退出重试循环
+                
+            except socketio.exceptions.ConnectionError as e:
+                print(f"❌ SocketIO 连接失败 (第 {retry_count} 次): {e}")
+                if self.sio.connected:
+                    try:
+                        self.sio.disconnect()
+                    except:
+                        pass
+                if retry_count < max_retries:
+                    print(f"⏳ 等待 5 秒后重试...")
+                    time.sleep(5)
+                else:
+                    print(f"💡 请检查服务器地址是否正确: {BASE_URL}")
+                    self.task_finished.set()
+                    
+            except requests.exceptions.RequestException as e:
+                print(f"❌ HTTP 请求失败 (第 {retry_count} 次): {e}")
+                if self.sio.connected:
+                    try:
+                        self.sio.disconnect()
+                    except:
+                        pass
+                if retry_count < max_retries:
+                    print(f"⏳ 等待 5 秒后重试...")
+                    time.sleep(5)
+                else:
+                    self.task_finished.set()
+                    
+            except Exception as e:
+                print(f"❌ 启动失败 (第 {retry_count} 次): {type(e).__name__}: {e}")
+                if self.sio.connected:
+                    try:
+                        self.sio.disconnect()
+                    except:
+                        pass
+                import traceback
+                traceback.print_exc()
+                if retry_count < max_retries:
+                    print(f"⏳ 等待 5 秒后重试...")
+                    time.sleep(5)
+                else:
+                    self.task_finished.set()
 
 def save_raw_file(data_list, filename):
     """将收集到的列表直接合并写入文件"""
