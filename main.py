@@ -305,24 +305,38 @@ class RawResourceFetcher:
 
     def _setup_handlers(self):
         """注册 WebSocket 监听事件"""
+        # 根namespace事件
+        @self.sio.on('connect')
+        def on_root_connect():
+            print(f"✅ 已连接至根服务器")
+
+        @self.sio.on('connect_error')
+        def on_root_connect_error(error):
+            print(f"❌ 根服务器连接错误: {error}")
+
+        @self.sio.on('disconnect')
+        def on_root_disconnect():
+            print("⚠️ 与根服务器断开连接")
+        
+        # /search namespace事件
         @self.sio.on('connect', namespace='/search')
         def on_connect():
-            print(f"✅ 已连接服务器 (Session: {self.session_id})")
+            print(f"✅ 已连接到 /search namespace (Session: {self.session_id})")
             self.connected.set()
             self.sio.emit('join_session', {'session_id': self.session_id}, namespace='/search')
 
         @self.sio.on('disconnect', namespace='/search')
         def on_disconnect():
-            print("⚠️ 与服务器断开连接")
+            print("⚠️ 与 /search namespace 断开连接")
             self.connected.clear()
 
         @self.sio.on('connect_error', namespace='/search')
         def on_connect_error(error):
-            print(f"❌ 连接错误: {error}")
+            print(f"❌ /search namespace 连接错误: {error}")
 
         @self.sio.on('error', namespace='/search')
         def on_error(error):
-            print(f"❌ 服务器错误: {error}")
+            print(f"❌ /search namespace 服务器错误: {error}")
 
         @self.sio.on('result', namespace='/search')
         def on_result(data):
@@ -361,24 +375,34 @@ class RawResourceFetcher:
                 retry_count += 1
                 print(f"🔗 正在连接至: {BASE_URL} (尝试 {retry_count}/{max_retries})")
                 
-                # 禁用SSL验证并设置更长的超时
+                # 单次连接到指定namespace，支持多transport
                 self.sio.connect(
                     BASE_URL, 
-                    namespaces=['/search'], 
-                    transports=['websocket', 'polling'],  # 添加fallback transport
-                    wait_timeout=15,
+                    namespaces=['/search'],
+                    transports=['polling', 'websocket'],  # polling更稳定
+                    wait_timeout=20,
                     headers={'User-Agent': USER_AGENT}
                 )
                 
-                # 等待连接完全建立（最多10秒）
-                if not self.connected.wait(timeout=10):
-                    print("❌ 连接超时：服务器无响应")
+                # 等待连接完全建立（最多15秒）
+                if not self.connected.wait(timeout=15):
+                    print("❌ 连接超时：无法建立namespace连接")
                     if self.sio.connected:
-                        self.sio.disconnect()
+                        try:
+                            self.sio.disconnect()
+                        except:
+                            pass
                     if retry_count < max_retries:
-                        print(f"⏳ 等待 3 秒后重试...")
-                        time.sleep(3)
+                        print(f"⏳ 等待 5 秒后重试...")
+                        time.sleep(5)
+                        # 重建sio实例
+                        self.sio = socketio.Client(logger=False, engineio_logger=False, reconnection=True, reconnection_attempts=1, reconnection_delay=1)
+                        self._setup_handlers()
                         continue
+                    else:
+                        print("⚠️ 达到最大重试次数，激活fallback模式")
+                        self.task_finished.set()
+                        return
                     self.task_finished.set()
                     return
                 
@@ -395,7 +419,9 @@ class RawResourceFetcher:
                 return  # 成功，退出重试循环
                 
             except socketio.exceptions.ConnectionError as e:
-                print(f"❌ SocketIO 连接失败 (第 {retry_count} 次): {e}")
+                error_msg = str(e)
+                print(f"❌ SocketIO 连接失败 (第 {retry_count} 次)")
+                print(f"   - 错误: {error_msg}")
                 if self.sio.connected:
                     try:
                         self.sio.disconnect()
@@ -404,10 +430,13 @@ class RawResourceFetcher:
                 if retry_count < max_retries:
                     print(f"⏳ 等待 5 秒后重试...")
                     time.sleep(5)
+                    # 重建sio实例
+                    self.sio = socketio.Client(logger=False, engineio_logger=False, reconnection=True, reconnection_attempts=1, reconnection_delay=1)
+                    self._setup_handlers()
                 else:
-                    print(f"💡 请检查服务器地址是否正确: {BASE_URL}")
+                    print(f"💡 已达最大重试次数，SocketIO连接失败")
+                    print(f"   - 将继续处理已有本地数据...")
                     self.task_finished.set()
-                    
             except requests.exceptions.RequestException as e:
                 print(f"❌ HTTP 请求失败 (第 {retry_count} 次): {e}")
                 if self.sio.connected:
