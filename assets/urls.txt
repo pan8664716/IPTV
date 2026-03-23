@@ -1,3 +1,4 @@
+http://skyr.wuaze.com/mg.txt
 https://raw.githubusercontent.com/Supprise0901/TVBox_live/refs/heads/main/live.txt
 https://raw.githubusercontent.com/YueChan/Live/refs/heads/main/IPTV.m3u
 https://raw.githubusercontent.com/zwc456baby/iptv_alive/refs/heads/master/live.m3u

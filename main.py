@@ -479,7 +479,7 @@ def save_raw_file(data_list, filename):
     
     print(f"\n✨ 聚合完成！")
     print(f"📂 原始 TXT 已保存至: {os.path.abspath(filename)}")
-    print(f"💡 现在你可以将此文件交给 CCSH/IPTV 项目进行精细化分类了。")
+    print(f"💡 现在你可以将此文件交给 pan8664716/IPTV 项目进行精细化分类了。")
 
 def process_single_line(line: str, classifier: ChannelClassifier, corrections: dict):
     if "#genre#" in line or "#EXTINF:" in line or "," not in line or "://" not in line:
