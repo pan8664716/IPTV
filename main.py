@@ -473,9 +473,13 @@ def save_raw_file(data_list, filename):
 
     # 直接用换行符连接所有节点的原始文本
     final_content = "\n".join(data_list)
-    
-    with open(filename, 'w', encoding='utf-8') as f:
-        f.write(final_content)
+    # 追加到文件末尾，保持原有内容不变
+    if os.path.exists(filename):
+        with open(filename, 'a', encoding='utf-8') as f:
+            f.write("\n" + final_content)
+    else:
+        with open(filename, 'w', encoding='utf-8') as f:
+            f.write(final_content)
     
     print(f"\n✨ 聚合完成！")
     print(f"📂 原始 TXT 已保存至: {os.path.abspath(filename)}")
@@ -591,6 +595,27 @@ if __name__ == "__main__":
     main_dict, local_dict = load_channel_dictionaries(dirs["main_channel"], dirs["local_channel"])
     classifier = ChannelClassifier(main_dict, local_dict, blacklist)
 
+    raw_output_path = dirs["raw_merged_resources"]
+    # 如果之前存在的原始文件过旧（超过24小时），则删除它以避免使用过时数据
+    if os.path.exists(raw_output_path):
+        os.remove(raw_output_path)
+
+    # 先从 http://skyr.wuaze.com/mg.txt 获取所有资源，保存到 assets/whitelist-blacklist/raw_merged_resources.txt，后续处理时优先使用这个文件
+    try:
+        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"}
+        response = requests.get("http://skyr.wuaze.com/mg.txt", headers=headers, timeout=URL_FETCH_TIMEOUT)
+        if response.status_code == 200:
+            # 自动识别编码并打印全部内容
+            response.encoding = response.apparent_encoding
+            save_raw_file([response.text], raw_output_path)
+        else:
+            print(f"⚠️ 获取 mg.txt 失败: HTTP {response.status_code}")
+    except Exception as e:
+        print(f"⚠️ 获取 mg.txt 失败: {e}")
+
+
+
+
     print(f"[PROCESS] 处理 SocketIO 聚合源（优先处理）")
     # 启动 SocketIO 资源抓取
     fetcher = RawResourceFetcher()
@@ -607,7 +632,6 @@ if __name__ == "__main__":
         print(f"⚠️ 断开连接时出错: {e}")
     
     # 保存原始文件到黑白名单目录
-    raw_output_path = dirs["raw_merged_resources"]
     save_raw_file(fetcher.raw_data_list[:25], raw_output_path)
     
     # 处理原始文件中的内容 - 最优先处理
