@@ -1,5 +1,5 @@
 #EXTM3U x-tvg-url="https://gh-proxy.com/https://github.com/pan8664716/IPTV/raw/refs/heads/main/e.xml.gz"
-#EXTINF:-1  tvg-name="20260627 05:13" tvg-logo="https://gh-proxy.com/https://raw.githubusercontent.com/pan8664716/IPTV/refs/heads/main/logo/20260627 05:13.png"  group-title="更新时间",20260627 05:13
+#EXTINF:-1  tvg-name="20260628 04:51" tvg-logo="https://gh-proxy.com/https://raw.githubusercontent.com/pan8664716/IPTV/refs/heads/main/logo/20260628 04:51.png"  group-title="更新时间",20260628 04:51
 http://ottrrs.hl.chinamobile.com/PLTV/88888888/224/3221226537/index.m3u8
 #EXTINF:-1  tvg-name="CCTV1" tvg-logo="https://gh-proxy.com/https://raw.githubusercontent.com/pan8664716/IPTV/refs/heads/main/logo/CCTV1.png"  group-title="央视频道",CCTV1
 http://ottrrs.hl.chinamobile.com/PLTV/88888888/224/3221226016/index.m3u8
